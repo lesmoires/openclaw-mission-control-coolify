@@ -1,80 +1,108 @@
+# OpenClaw Mission Control - Configuration Coolify
+# Compatible avec Coolify + réseau privé Hetzner
+
 name: openclaw-mission-control
 
 services:
   db:
     image: postgres:16-alpine
+    restart: always
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-mission_control}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+    # Port interne uniquement, pas exposé publiquement
+    expose:
+      - "5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 3s
       retries: 20
+    networks:
+      - mission-control
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
+    restart: always
+    # Port interne uniquement
+    expose:
+      - "6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
+    networks:
+      - mission-control
 
   backend:
     build:
-      # Build from repo root so the backend image can include repo-level assets
-      # like `backend/templates/`.
       context: .
       dockerfile: backend/Dockerfile
+    restart: always
     env_file:
       - ./backend/.env
     environment:
-      # Override localhost defaults for container networking
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-mission_control}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://mission-control.moiria.com}
       DB_AUTO_MIGRATE: ${DB_AUTO_MIGRATE:-true}
-      AUTH_MODE: ${AUTH_MODE}
+      AUTH_MODE: ${AUTH_MODE:-local}
       LOCAL_AUTH_TOKEN: ${LOCAL_AUTH_TOKEN}
       RQ_REDIS_URL: redis://redis:6379/0
+      # URL OpenClaw Gateway (configurable)
+      OPENCLAW_GATEWAY_URL: ${OPENCLAW_GATEWAY_URL:-http://openclaw:18789}
+      OPENCLAW_TOKEN: ${OPENCLAW_TOKEN}
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
-    ports:
-      - "${BACKEND_PORT:-8000}:8000"
+    # Exposé via Traefik (Coolify)
+    expose:
+      - "8000"
+    networks:
+      - mission-control
+      - coolify
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.mc-backend.rule=Host(`mission-control.moiria.com`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.mc-backend.entrypoints=https"
+      - "traefik.http.routers.mc-backend.tls.certresolver=letsencrypt"
+      - "traefik.http.services.mc-backend.loadbalancer.server.port=8000"
 
   frontend:
     build:
       context: ./frontend
       args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
-        NEXT_PUBLIC_AUTH_MODE: ${AUTH_MODE}
-    # Optional, user-managed env file.
-    # IMPORTANT: do NOT load `.env.example` here because it contains non-empty
-    # placeholder Clerk keys, which can accidentally flip Clerk "on".
-    env_file:
-      - path: ./frontend/.env
-        required: false
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://mission-control.moiria.com/api}
+        NEXT_PUBLIC_AUTH_MODE: ${AUTH_MODE:-local}
+    restart: always
     environment:
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
-      NEXT_PUBLIC_AUTH_MODE: ${AUTH_MODE}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://mission-control.moiria.com/api}
+      NEXT_PUBLIC_AUTH_MODE: ${AUTH_MODE:-local}
     depends_on:
       - backend
-    ports:
-      - "${FRONTEND_PORT:-3000}:3000"
+    # Exposé via Traefik (Coolify)
+    expose:
+      - "3000"
+    networks:
+      - mission-control
+      - coolify
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.mc-frontend.rule=Host(`mission-control.moiria.com`)"
+      - "traefik.http.routers.mc-frontend.entrypoints=https"
+      - "traefik.http.routers.mc-frontend.tls.certresolver=letsencrypt"
+      - "traefik.http.services.mc-frontend.loadbalancer.server.port=3000"
 
   webhook-worker:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    restart: always
     command: ["rq", "worker", "-u", "redis://redis:6379/0"]
     env_file:
       - ./backend/.env
@@ -85,13 +113,23 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-mission_control}
-      AUTH_MODE: ${AUTH_MODE}
+      AUTH_MODE: ${AUTH_MODE:-local}
       LOCAL_AUTH_TOKEN: ${LOCAL_AUTH_TOKEN}
       RQ_REDIS_URL: redis://redis:6379/0
       RQ_QUEUE_NAME: ${RQ_QUEUE_NAME:-default}
       RQ_DISPATCH_THROTTLE_SECONDS: ${RQ_DISPATCH_THROTTLE_SECONDS:-2.0}
       RQ_DISPATCH_MAX_RETRIES: ${RQ_DISPATCH_MAX_RETRIES:-3}
-    restart: unless-stopped
+      OPENCLAW_GATEWAY_URL: ${OPENCLAW_GATEWAY_URL:-http://openclaw:18789}
+      OPENCLAW_TOKEN: ${OPENCLAW_TOKEN}
+    networks:
+      - mission-control
 
 volumes:
   postgres_data:
+    driver: local
+
+networks:
+  mission-control:
+    driver: bridge
+  coolify:
+    external: true
