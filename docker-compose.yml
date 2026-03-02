@@ -1,0 +1,67 @@
+# Mission Control - Coolify Deployment
+# Version build-from-source (comme Railway)
+
+name: mission-control
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: mission_control
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - mission-control
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    networks:
+      - mission-control
+
+  backend:
+    build:
+      context: https://github.com/abhi1693/openclaw-mission-control.git#main
+      dockerfile: backend/Dockerfile
+    restart: always
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@db:5432/mission_control
+      CORS_ORIGINS: https://mission-control.moiria.com
+      DB_AUTO_MIGRATE: "true"
+      AUTH_MODE: local
+      LOCAL_AUTH_TOKEN: ${LOCAL_AUTH_TOKEN}
+      RQ_REDIS_URL: redis://redis:6379/0
+      OPENCLAW_GATEWAY_URL: ${OPENCLAW_GATEWAY_URL}
+      OPENCLAW_TOKEN: ${OPENCLAW_TOKEN}
+    expose:
+      - "8000"
+    networks:
+      - mission-control
+    depends_on:
+      - db
+      - redis
+
+  frontend:
+    build:
+      context: https://github.com/abhi1693/openclaw-mission-control.git#main
+      dockerfile: frontend/Dockerfile
+    restart: always
+    environment:
+      NEXT_PUBLIC_API_URL: https://mission-control.moiria.com/api
+      NEXT_PUBLIC_AUTH_MODE: local
+    ports:
+      - "3000:3000"
+    networks:
+      - mission-control
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+
+networks:
+  mission-control:
+    driver: bridge
