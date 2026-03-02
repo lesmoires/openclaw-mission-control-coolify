@@ -8,6 +8,7 @@ operate within a single scope (no `app.integrations.*` plumbing).
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import ssl
 from dataclasses import dataclass
@@ -187,6 +188,38 @@ def _build_gateway_url(config: GatewayConfig) -> str:
     parsed = urlparse(base_url)
     query = urlencode({"token": token})
     return str(urlunparse(parsed._replace(query=query)))
+
+
+def _extract_basic_auth_headers(gateway_url: str) -> dict[str, str]:
+    """Extract HTTP Basic Auth credentials from a URL's userinfo component.
+
+    When the gateway URL contains ``user:pass@host`` (commonly needed when the
+    gateway sits behind an nginx reverse proxy with ``auth_basic``), this
+    function strips the credentials from the URL and returns an
+    ``Authorization: Basic …`` header dict suitable for
+    ``websockets.connect(additional_headers=…)``.
+
+    Returns an empty dict when no userinfo is present.
+    """
+    parsed = urlparse(gateway_url)
+    if not parsed.username:
+        return {}
+    username = parsed.username
+    password = parsed.password or ""
+    credentials = base64.b64encode(f"{username}:{password}".encode()).decode()
+    return {"Authorization": f"Basic {credentials}"}
+
+
+def _strip_userinfo_from_url(gateway_url: str) -> str:
+    """Remove userinfo (user:pass@) from a URL so it can be passed to connect."""
+    parsed = urlparse(gateway_url)
+    if not parsed.username:
+        return gateway_url
+    # Rebuild netloc without userinfo
+    netloc = parsed.hostname or ""
+    if parsed.port:
+        netloc = f"{netloc}:{parsed.port}"
+    return str(urlunparse(parsed._replace(netloc=netloc)))
 
 
 def _redacted_url_for_log(raw_url: str) -> str:
@@ -403,10 +436,14 @@ async def _openclaw_call_once(
 ) -> object:
     origin = _build_control_ui_origin(gateway_url) if config.disable_device_pairing else None
     ssl_context = _create_ssl_context(config)
+    basic_auth = _extract_basic_auth_headers(gateway_url)
+    clean_url = _strip_userinfo_from_url(gateway_url)
     connect_kwargs: dict[str, Any] = {"ping_interval": None}
+    if basic_auth:
+        connect_kwargs["additional_headers"] = basic_auth
     if origin is not None:
         connect_kwargs["origin"] = origin
-    async with websockets.connect(gateway_url, ssl=ssl_context, **connect_kwargs) as ws:
+    async with websockets.connect(clean_url, ssl=ssl_context, **connect_kwargs) as ws:
         first_message = await _recv_first_message_or_none(ws)
         await _ensure_connected(ws, first_message, config)
         return await _send_request(ws, method, params)
@@ -419,10 +456,14 @@ async def _openclaw_connect_metadata_once(
 ) -> object:
     origin = _build_control_ui_origin(gateway_url) if config.disable_device_pairing else None
     ssl_context = _create_ssl_context(config)
+    basic_auth = _extract_basic_auth_headers(gateway_url)
+    clean_url = _strip_userinfo_from_url(gateway_url)
     connect_kwargs: dict[str, Any] = {"ping_interval": None}
+    if basic_auth:
+        connect_kwargs["additional_headers"] = basic_auth
     if origin is not None:
         connect_kwargs["origin"] = origin
-    async with websockets.connect(gateway_url, ssl=ssl_context, **connect_kwargs) as ws:
+    async with websockets.connect(clean_url, ssl=ssl_context, **connect_kwargs) as ws:
         first_message = await _recv_first_message_or_none(ws)
         return await _ensure_connected(ws, first_message, config)
 
