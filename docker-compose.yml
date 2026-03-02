@@ -77,6 +77,7 @@ services:
       ENVIRONMENT: production
       DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@db:5432/mission_control
       CORS_ORIGINS: ${CORS_ORIGINS:-}
+      BASE_URL: ${NEXT_PUBLIC_API_URL:-}
       DB_AUTO_MIGRATE: "true"
       AUTH_MODE: ${AUTH_MODE:-local}
       LOCAL_AUTH_TOKEN: ${LOCAL_AUTH_TOKEN}
