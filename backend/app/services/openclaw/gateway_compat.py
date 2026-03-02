@@ -15,7 +15,7 @@ from app.services.openclaw.gateway_rpc import (
 )
 
 _CALVER_PATTERN = re.compile(
-    r"^v?(?P<year>\d{4})\.(?P<month>\d{1,2})\.(?P<day>\d{1,2})(?:-(?P<rev>\d+))?$",
+    r"^v?(?P<year>\d{4})\.(?P<month>\d{1,2})\.(?P<day>\d{1,2})(?:-(?P<rev>\d+))?(?:[-.].*)?$",
     re.IGNORECASE,
 )
 _CONNECT_VERSION_PATH: tuple[str, ...] = ("server", "version")
