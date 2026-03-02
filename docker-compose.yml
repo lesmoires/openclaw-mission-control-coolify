@@ -20,12 +20,12 @@ services:
   # Single entry point. Coolify Traefik terminates TLS and routes to
   # this container on port 80. Caddy handles internal path routing.
   proxy:
-    image: caddy:2-alpine
+    build:
+      context: ./proxy
+      dockerfile: Dockerfile
     restart: always
     environment:
       - SERVICE_FQDN_PROXY_80
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
     depends_on:
       backend:
         condition: service_healthy
