@@ -1,9 +1,44 @@
-# Mission Control - Coolify Deployment
-# Version build-from-source (comme Railway)
+# Mission Control — Coolify Docker Compose Deployment
+#
+# Deploy as a "Docker Compose" resource in Coolify.
+# Coolify assigns the FQDN to the `proxy` service (port 80).
+# Caddy routes /api/* to the backend and everything else to the frontend.
+#
+# Required environment variables (set in Coolify UI):
+#   SERVICE_FQDN_PROXY_80        — auto-set by Coolify from FQDN config
+#   POSTGRES_PASSWORD             — strong random password
+#   LOCAL_AUTH_TOKEN               — min 50 chars (openssl rand -hex 32)
+#   OPENCLAW_GATEWAY_URL           — e.g. http://openclaw-<uuid>:18789
+#   OPENCLAW_TOKEN                 — from OpenClaw gateway setup
+#   NEXT_PUBLIC_API_URL            — e.g. https://mission-control.moiria.com
+#   NEXT_PUBLIC_AUTH_MODE          — local or clerk
 
 name: mission-control
 
 services:
+  # ── Reverse proxy ─────────────────────────────────────────────────
+  # Single entry point. Coolify Traefik terminates TLS and routes to
+  # this container on port 80. Caddy handles internal path routing.
+  proxy:
+    image: caddy:2-alpine
+    restart: always
+    environment:
+      - SERVICE_FQDN_PROXY_80
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:80/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ── PostgreSQL ────────────────────────────────────────────────────
   db:
     image: postgres:16-alpine
     restart: always
@@ -13,55 +48,103 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    networks:
-      - mission-control
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d mission_control"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
+  # ── Redis ─────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     restart: always
-    networks:
-      - mission-control
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
+  # ── Backend API ───────────────────────────────────────────────────
+  # FastAPI application. Build context is the repo root because the
+  # Dockerfile references paths like `backend/pyproject.toml`.
   backend:
     build:
-      context: https://github.com/abhi1693/openclaw-mission-control.git#main
+      context: .
       dockerfile: backend/Dockerfile
     restart: always
     environment:
+      ENVIRONMENT: production
       DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@db:5432/mission_control
-      CORS_ORIGINS: https://mission-control.moiria.com
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
       DB_AUTO_MIGRATE: "true"
-      AUTH_MODE: local
+      AUTH_MODE: ${AUTH_MODE:-local}
       LOCAL_AUTH_TOKEN: ${LOCAL_AUTH_TOKEN}
       RQ_REDIS_URL: redis://redis:6379/0
-      OPENCLAW_GATEWAY_URL: ${OPENCLAW_GATEWAY_URL}
-      OPENCLAW_TOKEN: ${OPENCLAW_TOKEN}
+      RQ_QUEUE_NAME: ${RQ_QUEUE_NAME:-default}
+      RQ_DISPATCH_THROTTLE_SECONDS: ${RQ_DISPATCH_THROTTLE_SECONDS:-2.0}
+      RQ_DISPATCH_MAX_RETRIES: ${RQ_DISPATCH_MAX_RETRIES:-3}
+      OPENCLAW_GATEWAY_URL: ${OPENCLAW_GATEWAY_URL:-}
+      OPENCLAW_TOKEN: ${OPENCLAW_TOKEN:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+      REQUEST_LOG_SLOW_MS: ${REQUEST_LOG_SLOW_MS:-1000}
     expose:
       - "8000"
-    networks:
-      - mission-control
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
+  # ── Queue Worker ──────────────────────────────────────────────────
+  # Reuses the backend image. Runs the Redis queue worker loop for
+  # lifecycle reconciliation and webhook dispatch.
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: always
+    command: ["python", "-m", "app.services.queue_worker"]
+    environment:
+      ENVIRONMENT: production
+      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@db:5432/mission_control
+      AUTH_MODE: ${AUTH_MODE:-local}
+      LOCAL_AUTH_TOKEN: ${LOCAL_AUTH_TOKEN}
+      RQ_REDIS_URL: redis://redis:6379/0
+      RQ_QUEUE_NAME: ${RQ_QUEUE_NAME:-default}
+      RQ_DISPATCH_THROTTLE_SECONDS: ${RQ_DISPATCH_THROTTLE_SECONDS:-2.0}
+      RQ_DISPATCH_MAX_RETRIES: ${RQ_DISPATCH_MAX_RETRIES:-3}
+      OPENCLAW_GATEWAY_URL: ${OPENCLAW_GATEWAY_URL:-}
+      OPENCLAW_TOKEN: ${OPENCLAW_TOKEN:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ── Frontend ──────────────────────────────────────────────────────
+  # Next.js application. Build context is ./frontend because the
+  # Dockerfile expects package.json at the root of its context.
+  # NEXT_PUBLIC_* vars are baked at build time.
   frontend:
     build:
-      context: https://github.com/abhi1693/openclaw-mission-control.git#main
-      dockerfile: frontend/Dockerfile
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        NEXT_PUBLIC_AUTH_MODE: ${NEXT_PUBLIC_AUTH_MODE:-local}
     restart: always
-    environment:
-      NEXT_PUBLIC_API_URL: https://mission-control.moiria.com/api
-      NEXT_PUBLIC_AUTH_MODE: local
-    ports:
-      - "3000:3000"
-    networks:
-      - mission-control
-    depends_on:
-      - backend
+    expose:
+      - "3000"
 
 volumes:
   postgres_data:
-
-networks:
-  mission-control:
-    driver: bridge

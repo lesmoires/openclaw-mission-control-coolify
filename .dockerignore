@@ -34,3 +34,12 @@
 
 # Logs
 **/*.log
+
+# Plans / docs not needed in images
+plans/
+docs/
+
+# Tests not needed in images
+backend/tests/
+frontend/cypress/
+frontend/coverage/

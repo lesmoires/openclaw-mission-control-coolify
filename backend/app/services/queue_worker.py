@@ -150,3 +150,7 @@ def run_worker() -> None:
         asyncio.run(_run_worker_loop())
     finally:
         logger.info("queue.worker.stopped", extra={"queue_name": settings.rq_queue_name})
+
+
+if __name__ == "__main__":
+    run_worker()

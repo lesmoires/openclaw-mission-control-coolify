@@ -24,20 +24,17 @@ FROM node:20-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
-ARG NEXT_PUBLIC_AUTH_MODE
 
-# If provided at runtime, Next will expose NEXT_PUBLIC_* to the browser as well
-# (but note some values may be baked at build time).
-ENV NEXT_PUBLIC_API_URL=http://localhost:8000
-ENV NEXT_PUBLIC_AUTH_MODE=${NEXT_PUBLIC_AUTH_MODE}
+# Next.js standalone output includes only the files needed to run.
+# Copy the standalone server and static assets.
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
 
-COPY --from=builder /app/.next ./.next
 # `public/` is optional in Next.js apps; repo may not have it.
-# Avoid failing the build when the directory is absent.
-COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/next.config.ts ./next.config.ts
+# Create an empty directory so the server doesn't error on missing public/.
+RUN mkdir -p ./public
 
 EXPOSE 3000
 
-CMD ["npm", "run", "start"]
+# The standalone server is a single Node.js file.
+CMD ["node", "server.js"]
