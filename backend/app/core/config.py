@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     rq_dispatch_retry_max_seconds: float = 120.0
 
     # OpenClaw gateway runtime compatibility
-    gateway_min_version: str = "2026.02.9"
+    gateway_min_version: str = "2026.2.1"
 
     # Logging
     log_level: str = "INFO"
