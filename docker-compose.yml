@@ -89,6 +89,10 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-text}
       REQUEST_LOG_SLOW_MS: ${REQUEST_LOG_SLOW_MS:-1000}
+      # Persist device identity across redeploys so gateway pairing survives.
+      OPENCLAW_GATEWAY_DEVICE_IDENTITY_PATH: /data/device-keys/identity.json
+    volumes:
+      - device_keys:/data/device-keys
     expose:
       - "8000"
     depends_on:
@@ -148,3 +152,4 @@ services:
 
 volumes:
   postgres_data:
+  device_keys:
