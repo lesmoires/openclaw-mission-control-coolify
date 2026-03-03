@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+
+from app.schemas.agents import AgentRead
 
 from app.api.deps import require_org_admin
 from app.core.auth import AuthContext, get_auth_context
@@ -19,6 +22,7 @@ from app.schemas.gateway_api import (
     GatewaySessionsResponse,
     GatewaysStatusResponse,
 )
+from app.services.openclaw.gateway_heartbeat_service import GatewayHeartbeatService
 from app.services.openclaw.gateway_rpc import GATEWAY_EVENTS, GATEWAY_METHODS, PROTOCOL_VERSION
 from app.services.openclaw.session_service import GatewaySessionService
 from app.services.organizations import OrganizationContext
@@ -150,3 +154,38 @@ async def gateway_commands(
         methods=GATEWAY_METHODS,
         events=GATEWAY_EVENTS,
     )
+
+
+@router.post("/agents/{agent_id}/heartbeat", response_model=AgentRead)
+async def gateway_report_agent_heartbeat(
+    agent_id: UUID,
+    session: AsyncSession = SESSION_DEP,
+    _auth: AuthContext = AUTH_DEP,
+    _ctx: OrganizationContext = ORG_ADMIN_DEP,
+) -> AgentRead:
+    """Gateway reports a heartbeat on behalf of a board agent.
+
+    This endpoint allows the OpenClaw gateway to report that a board agent
+    is active and configured, since board agents don't run as separate
+    processes and cannot send their own heartbeats.
+
+    The gateway calls this endpoint periodically for each configured
+    board agent to maintain their "online" status in Mission Control.
+
+    Args:
+        agent_id: UUID of the board agent to report heartbeat for
+
+    Returns:
+        Updated agent with new last_seen_at timestamp
+
+    Raises:
+        HTTPException: 404 if agent not found or is gateway-main agent
+    """
+    service = GatewayHeartbeatService()
+    try:
+        return await service.report_board_agent_heartbeat(session, agent_id)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
