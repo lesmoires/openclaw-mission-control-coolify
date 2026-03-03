@@ -124,20 +124,57 @@ async def flush_queue(*, block: bool = False, block_timeout: float = 0) -> int:
     return processed
 
 
-async def _run_worker_loop() -> None:
+async def _run_heartbeat_reporter() -> None:
+    """Background task to periodically report heartbeats for board agents."""
+    from app.services.openclaw.gateway_heartbeat_reporter import (
+        run_heartbeat_reporter,
+    )
+
+    # Initial delay before first run
+    await asyncio.sleep(10)
+
     while True:
         try:
-            await flush_queue(
-                block=True,
-                # Keep a finite timeout so scheduled tasks are periodically drained.
-                block_timeout=_WORKER_BLOCK_TIMEOUT_SECONDS,
+            result = await run_heartbeat_reporter()
+            logger.debug(
+                "heartbeat.reporter.completed",
+                extra={
+                    "total_reported": result.get("total_reported", 0),
+                    "total_failed": result.get("total_failed", 0),
+                },
             )
         except Exception:
-            logger.exception(
-                "queue.worker.loop_failed",
-                extra={"queue_name": settings.rq_queue_name},
-            )
-            await asyncio.sleep(1)
+            logger.exception("heartbeat.reporter.failed")
+
+        # Run every 30 seconds
+        await asyncio.sleep(30)
+
+
+async def _run_worker_loop() -> None:
+    # Start heartbeat reporter as background task
+    heartbeat_task = asyncio.create_task(_run_heartbeat_reporter())
+
+    try:
+        while True:
+            try:
+                await flush_queue(
+                    block=True,
+                    # Keep a finite timeout so scheduled tasks are periodically drained.
+                    block_timeout=_WORKER_BLOCK_TIMEOUT_SECONDS,
+                )
+            except Exception:
+                logger.exception(
+                    "queue.worker.loop_failed",
+                    extra={"queue_name": settings.rq_queue_name},
+                )
+                await asyncio.sleep(1)
+    finally:
+        # Cancel heartbeat reporter on shutdown
+        heartbeat_task.cancel()
+        try:
+            await heartbeat_task
+        except asyncio.CancelledError:
+            pass
 
 
 def run_worker() -> None:
