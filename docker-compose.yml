@@ -10,7 +10,7 @@
 #   LOCAL_AUTH_TOKEN               — min 50 chars (openssl rand -hex 32)
 #   OPENCLAW_GATEWAY_URL           — e.g. http://openclaw-<uuid>:18789
 #   OPENCLAW_TOKEN                 — from OpenClaw gateway setup
-#   NEXT_PUBLIC_API_URL            — e.g. https://mission-control.moiria.com
+#   NEXT_PUBLIC_API_URL            — e.g. https://mission-control.your-domain.com
 #   NEXT_PUBLIC_AUTH_MODE          — local or clerk
 
 name: mission-control
